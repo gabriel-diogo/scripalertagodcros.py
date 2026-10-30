@@ -3,8 +3,8 @@ import requests
 import yfinance as yf
 
 # Configurações do Telegram
-TOKEN = "9070151788:AAFhgfJpi_I3-wiochhLFgoVT2k7JXQNxlY"
-CHAT_ID = "9106333952"
+TOKEN = ""
+CHAT_ID = ""
 
 # Lista expandida de ativos (Forex e Índices no Yahoo Finance)
 ATIVOS = [

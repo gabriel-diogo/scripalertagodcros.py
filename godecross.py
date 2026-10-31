@@ -5,8 +5,8 @@ import pandas as pd
 from datetime import datetime
 
 # Configurações do Telegram
-TOKEN = "9070151788:AAFhgfJpi_I3-wiochhLFgoVT2k7JXQNxlY"
-CHAT_ID = "9106333952"
+TOKEN = ""
+CHAT_ID = ""
 
 # Ativos separados por categoria
 CATEGORIAS = {

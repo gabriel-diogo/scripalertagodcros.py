@@ -2,8 +2,8 @@ import time, requests, yfinance as yf, pandas as pd, warnings
 warnings.filterwarnings("ignore")
 from datetime import datetime
 
-TOKEN = "9070151788:AAFhgfJpi_I3-wiochhLFgoVT2k7JXQNxlY"
-CHAT_ID = "9106333952"
+TOKEN = ""
+CHAT_ID = ""
 
 CATEGORIAS = {
     "💱 FOREX": ["EURUSD=X", "GBPUSD=X", "AUDUSD=X", "USDJPY=X", "USDCAD=X", "NZDUSD=X", "EURGBP=X"],
@@ -57,8 +57,7 @@ def calcular_adx(df, window=14):
         return 0.0
 
 def print_tabela(titulo, lista):
-    # lista = [(ticker, dist, adx, cruzou), ...]
-    lista = sorted(lista, key=lambda x: x[1]) # ordena por distancia
+    lista = sorted(lista, key=lambda x: x[1])
     print(f"\n{titulo}")
     print(f"{'ATIVO':<12} | {'DIST':<7} | {'ADX':<6} | STATUS")
     print("-"*45)
@@ -66,50 +65,132 @@ def print_tabela(titulo, lista):
         status = "🔥 CRUZOU" if cruzou else ("🟢 PERTO" if dist<=0.10 else "🟡 OK" if dist<=0.25 else "")
         print(f"{t:<12} | {dist:5.3f}% | {adx:5.1f} | {status}")
 
-def verificar_tudo():
-    lista_15m=[]; lista_4h=[]; lista_cruz=[]
+# ==========================================
+# 1. ANÁLISE MACRO (4H) - O GRANDE MANDA NO MENOR
+# ==========================================
+def analisar_mercado_4h():
+    macro_aprovados = {} # Guarda a força da tendência macro por ativo
+    print("\n--- [4h] Analisando Gráfico Macro (O gráfico maior manda) ---")
+    
     for cat, tickers in CATEGORIAS.items():
         for t in tickers:
-            d=download_seguro(t,"7d","15m")
-            if d.empty: d=download_seguro(t,"90d","1d")
-            close=pegar_close(d)
-            if close is None or len(close)<20: continue
+            d = download_seguro(t, "60d", "1h")
+            if d.empty: d = download_seguro(t, "60d", "1d")
+            if d.empty: continue
+            
             if isinstance(d.columns, pd.MultiIndex):
-                try: d_full=d.xs(t, axis=1, level=1)
-                except: d_full=d
-            else: d_full=d
+                try: d_full = d.xs(t, axis=1, level=1)
+                except: d_full = d
+            else: d_full = d
 
-            ema80=close.ewm(span=80, adjust=False).mean()
-            ema200=close.ewm(span=200, adjust=False).mean()
-            dist=abs((ema80.iloc[-1]-ema200.iloc[-1])/ema200.iloc[-1])*100
-            adx=calcular_adx(d_full) if 'High' in d_full else 0
-            cruzou=(ema80.iloc[-2]<=ema200.iloc[-2]) and (ema80.iloc[-1]>ema200.iloc[-1])
+            try:
+                df_4h = d_full.resample('4h').agg({
+                    'Open': 'first', 'High': 'max', 'Low': 'min', 'Close': 'last'
+                }).dropna()
+            except:
+                continue
 
-            lista_15m.append((t, dist, adx, cruzou))
-            lista_4h.append((t, dist, adx, cruzou))
-            lista_cruz.append((t, dist, adx, cruzou))
+            close = pegar_close(df_4h)
+            if close is None or len(close) < 200: continue
 
-            # envia só os bons pro Telegram pra não spammar
-            if dist<=0.10 or cruzou:
-                enviar_telegram(f"🟢 *15m {cat} - {t}* Dist `{dist:.3f}%` ADX `{adx:.1f}` {'CRUZOU!' if cruzou else ''}")
-            time.sleep(0.3)
+            ema80 = close.ewm(span=80, adjust=False).mean()
+            ema200 = close.ewm(span=200, adjust=False).mean()
+            dist = abs((ema80.iloc[-1] - ema200.iloc[-1]) / ema200.iloc[-1]) * 100
+            adx = calcular_adx(df_4h)
+            
+            # Condição macro de alta: EMA 80 acima da 200 (ou muito perto) e ADX indicando tendência
+            tendencia_alta_macro = (ema80.iloc[-1] > ema200.iloc[-1]) or (dist <= 0.25)
+            adx_forte = adx >= 20.0
+            
+            score_macro = adx if (tendencia_alta_macro and adx_forte) else 0
+            macro_aprovados[t] = {"score": score_macro, "adx": adx, "dist": dist}
+            
+    return macro_aprovados
 
-    print_tabela("--- [15m] DISTANCIA EMA 80x200 (ordenado) ---", lista_15m)
-    print_tabela("--- [4h] TENDENCIA + ADX (ordenado) ---", lista_4h)
+# ==========================================
+# 2. VERIFICAÇÃO 5M E 15M (VALIDADO PELO MACRO)
+# ==========================================
+def executar_varredura():
+    macro_data = analisar_mercado_4h()
     
-    print("\n--- [NOVO] CRUZAMENTO RECENTE + ADX VERDE ---")
-    print(f"{'ATIVO':<12} | {'DIST':<7} | {'ADX':<6} | CRUZOU?")
-    print("-"*45)
-    for t, dist, adx, cruzou in sorted(lista_cruz, key=lambda x: x[1]):
-        if cruzou and adx>=25:
-            print(f"{t:<12} | {dist:5.3f}% | {adx:5.1f} | SIM 🔥")
-            enviar_telegram(f"🚀 *CRUZAMENTO + ADX VERDE - {t}* Dist `{dist:.3f}%` ADX `{adx:.1f}`")
-        else:
-            print(f"{t:<12} | {dist:5.3f}% | {adx:5.1f} | {cruzou}")
+    lista_5m = []
+    lista_15m = []
+    ranking_geral = []
 
-if __name__=="__main__":
-    print("Bot ORGANIZADO Iniciado!")
+    print("\n--- A analisar Timeframes Menores (5m e 15m) com Filtro Macro ---")
+    
+    for cat, tickers in CATEGORIAS.items():
+        for t in tickers:
+            # Pega dados de 5m
+            d_5m = download_seguro(t, "2d", "5m")
+            close_5m = pegar_close(d_5m)
+            
+            # Pega dados de 15m
+            d_15m = download_seguro(t, "7d", "15m")
+            close_15m = pegar_close(d_15m)
+            
+            # Dados macro obtidos anteriormente
+            info_macro = macro_data.get(t, {"score": 0, "adx": 0, "dist": 99})
+            score_macro = info_macro["score"]
+            
+            # --- Processamento 5m ---
+            if close_5m is not None and len(close_5m) >= 200:
+                ema80_5 = close_5m.ewm(span=80, adjust=False).mean()
+                ema200_5 = close_5m.ewm(span=200, adjust=False).mean()
+                dist_5 = abs((ema80_5.iloc[-1] - ema200_5.iloc[-1]) / ema200_5.iloc[-1]) * 100
+                cruzou_5 = (ema80_5.iloc[-2] <= ema200_5.iloc[-2]) and (ema80_5.iloc[-1] > ema200_5.iloc[-1])
+                
+                lista_5m.append((t, dist_5, info_macro["adx"], cruzou_5))
+                
+                # Se o macro aprovar (score > 0) e houver gatilho no 5m
+                if score_macro > 0 and (cruzou_5 or dist_5 <= 0.08):
+                    enviar_telegram(f"⚡ *SINAL 5M VALIDADO PELO MACRO ({cat})*\nAtivo: `{t}`\nDistância 5m: `{dist_5:.3f}%` | ADX Macro: `{info_macro['adx']:.1f}`")
+
+            # --- Processamento 15m ---
+            if close_15m is not None and len(close_15m) >= 200:
+                ema80_15 = close_15m.ewm(span=80, adjust=False).mean()
+                ema200_15 = close_15m.ewm(span=200, adjust=False).mean()
+                dist_15 = abs((ema80_15.iloc[-1] - ema200_15.iloc[-1]) / ema200_15.iloc[-1]) * 100
+                cruzou_15 = (ema80_15.iloc[-2] <= ema200_15.iloc[-2]) and (ema80_15.iloc[-1] > ema200_15.iloc[-1])
+                
+                lista_15m.append((t, dist_15, info_macro["adx"], cruzou_15))
+                
+                if score_macro > 0 and (cruzou_15 or dist_15 <= 0.10):
+                    enviar_telegram(f"🟢 *SINAL 15M VALIDADO PELO MACRO ({cat})*\nAtivo: `{t}`\nDistância 15m: `{dist_15:.3f}%` | ADX Macro: `{info_macro['adx']:.1f}`")
+
+            # Pontuação final para o Top 10 (Combina Força ADX Macro + Proximidade das Médias)
+            potencial_alta = score_macro + (1.0 / (info_macro["dist"] + 0.1))
+            ranking_geral.append((t, potencial_alta, info_macro["adx"], info_macro["dist"]))
+            
+            time.sleep(0.2)
+
+    print_tabela("--- [5m] DISTANCIA EMA 80x200 ---", lista_5m)
+    print_tabela("--- [15m] DISTANCIA EMA 80x200 ---", lista_15m)
+
+    # ==========================================
+    # 3. GERAÇÃO DO TOP 10 DE MAIOR POSSIBILIDADE DE ALTA
+    # ==========================================
+    ranking_geral = sorted(ranking_geral, key=lambda x: x[1], reverse=True)
+    
+    print("\n" + "="*50)
+    print("🏆 TOP 10 ATIVOS COM MAIOR POSSIBILIDADE DE ALTA (Macro > Menor)")
+    print("="*50)
+    print(f"{'POS':<4} | {'ATIVO':<12} | {'ADX 4H':<8} | {'DIST EMA':<8}")
+    print("-"*50)
+    
+    top_msg = "🏆 *TOP 10 OPORTUNIDADES DE ALTA (Filtro Macro)*:\n"
+    for idx, (t, pot, adx, dist) in enumerate(ranking_geral[:10], 1):
+        print(f"{idx:<4} | {t:<12} | {adx:8.1f} | {dist:7.3f}%")
+        top_msg += f"{idx}. `{t}` (ADX: {adx:.1f} | Dist: {dist:.3f}%)\n"
+        
+    enviar_telegram(top_msg)
+    print("="*50)
+
+if __name__ == "__main__":
+    print("Bot Jerárquico (Gráfico Maior Manda no Menor) Iniciado!")
+    enviar_telegram("🤖 Bot Hierárquico Ativo: H4 filtrando M5 e M15 com Top 10 automático!")
+    
     while True:
-        verificar_tudo()
-        print("\n--- Aguardando 15 min ---")
+        executar_varredura()
+        print("\n--- Ciclo concluído. Aguardando 15 min ---")
         time.sleep(900)

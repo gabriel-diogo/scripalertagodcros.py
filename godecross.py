@@ -13,8 +13,8 @@ warnings.filterwarnings("ignore")
 # 1. CONFIGURAÇÕES
 # =========================================================
 
-TOKEN = os.getenv("TELEGRAM_TOKEN", "9070151788:AAFhgfJpi_I3-wiochhLFgoVT2k7JXQNxlY").strip()
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "9106333952").strip()
+TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 CATEGORIAS = {
     "FOREX": [
